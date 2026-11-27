@@ -1,6 +1,8 @@
 package com.subhranil.url_shortner.controller;
 
 import com.subhranil.url_shortner.dto.AnalyticsResponse;
+import com.subhranil.url_shortner.dto.PagedResponse;
+import com.subhranil.url_shortner.dto.UrlSummary;
 import com.subhranil.url_shortner.dto.ShortenRequest;
 import com.subhranil.url_shortner.dto.ShortenResponse;
 import com.subhranil.url_shortner.exception.ErrorResponse;
@@ -27,9 +29,13 @@ public class UrlController {
 
     private final UrlService urlService;
 
-    @Operation(summary = "Shorten a URL")
-    @ApiResponse(responseCode = "200", description = "Short URL created")
-    @ApiResponse(responseCode = "400", description = "URL is missing or blank", content = @Content)
+    @Operation(summary = "Shorten a URL",
+            description = "The URL is normalized first (lowercase scheme and host, default port and bare trailing "
+                    + "slash removed). If that URL was shortened before, its existing short link is returned "
+                    + "instead of a new one. Only http:// and https:// URLs are accepted.")
+    @ApiResponse(responseCode = "200", description = "Short URL created, or the existing one returned")
+    @ApiResponse(responseCode = "400", description = "URL is missing, blank, malformed or not http/https",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     @PostMapping("/api/shorten")
     public ResponseEntity<ShortenResponse> shorten(@Valid @RequestBody ShortenRequest req) {
         return ResponseEntity.ok(urlService.shortenUrl(req.getUrl()));
@@ -46,6 +52,18 @@ public class UrlController {
         return ResponseEntity.status(HttpStatus.FOUND)
                 .location(URI.create(url))
                 .build();
+    }
+
+    @Operation(summary = "List all short links",
+            description = "Newest first, with click counts. Paginated: size is capped at "
+                    + UrlService.MAX_PAGE_SIZE + ". Public for now: every link is visible to anyone "
+                    + "until user accounts are added.")
+    @ApiResponse(responseCode = "200", description = "A page of short links")
+    @GetMapping("/api/urls")
+    public ResponseEntity<PagedResponse<UrlSummary>> listUrls(
+            @Parameter(description = "Page number, starting at 0") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Items per page (1-100)") @RequestParam(defaultValue = "20") int size) {
+        return ResponseEntity.ok(urlService.listUrls(page, size));
     }
 
     @Operation(summary = "Preview where a short link goes",
