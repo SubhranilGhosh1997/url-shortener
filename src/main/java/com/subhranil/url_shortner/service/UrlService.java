@@ -30,11 +30,27 @@ public class UrlService {
     private final StringRedisTemplate redisTemplate;
     private final ClickEventProducer clickEventProducer;
     private final ShortCodeGenerator shortCodeGenerator;
+    private final UrlNormalizer urlNormalizer;
 
     @Value("${app.base-url}")
     private String baseUrl;
 
-    public ShortenResponse shortenUrl(String originalUrl) {
+    /**
+     * Returns the existing short link if this URL (after normalizing) was shortened before, so each URL
+     * gets one code. When duplicates from before this rule exist, the oldest one wins.
+     * Not race-proof: two simultaneous requests for a new URL can still create two codes, which is harmless.
+     * Once user accounts exist, reuse should be per user (same URL + same owner).
+     */
+    public ShortenResponse shortenUrl(String rawUrl) {
+        String originalUrl = urlNormalizer.normalize(rawUrl);
+
+        var existing = repository.findFirstByOriginalUrlAndShortCodeIsNotNullOrderByIdAsc(originalUrl);
+        if (existing.isPresent()) {
+            String shortCode = existing.get().getShortCode();
+            redisTemplate.opsForValue().set(CACHE_PREFIX + shortCode, originalUrl);
+            return new ShortenResponse(shortCode, baseUrl + shortCode, originalUrl);
+        }
+
         UrlMapping mapping = new UrlMapping();
         mapping.setOriginalUrl(originalUrl);
         mapping.setCreatedAt(LocalDateTime.now());

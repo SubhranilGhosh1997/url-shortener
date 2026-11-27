@@ -43,7 +43,7 @@ Redirects are served from a Redis cache. Click tracking runs asynchronously thro
 
 ### How it works
 
-1. **Shorten:** the URL is saved to PostgreSQL. The generated row ID is scrambled into a random-looking 7-character Base62 short code (for example `tJvSh8k`), and the mapping is written to Redis.
+1. **Shorten:** the URL is validated and normalized. If it was shortened before, the existing code is returned. Otherwise it is saved to PostgreSQL. The generated row ID is scrambled into a random-looking 7-character Base62 short code (for example `tJvSh8k`), and the mapping is written to Redis.
 2. **Redirect:** the app looks in Redis first (cache-aside). On a miss it reads PostgreSQL and repopulates the cache. It then publishes a click event to Kafka and returns an HTTP `302`.
 3. **Count clicks:** a Kafka consumer reads each event and runs an atomic `INCR` on a Redis counter for that short code.
 4. **Analytics:** the analytics endpoint reads the counter from Redis.
@@ -107,6 +107,8 @@ Base URL: `http://localhost:8081`
 ### Shorten a URL
 
 `POST /api/shorten`
+
+Each URL gets one short link. If you shorten a URL that was shortened before, you get the existing short link back. URLs are normalized first, so `https://github.com`, `https://github.com/` and `HTTPS://GitHub.com:443/` all count as the same link. Paths and query strings are kept as-is. Only `http://` and `https://` URLs are accepted; anything else returns `400`.
 
 ```bash
 curl -X POST http://localhost:8081/api/shorten \
@@ -250,7 +252,7 @@ url-shortener/
 - [ ] Link expiry (TTL on the Redis cache and an `expiresAt` field in PostgreSQL)
 - [ ] Custom short codes
 - [ ] Rate limiting per client with Redis
-- [ ] Stricter URL validation (http/https only)
+- [x] Stricter URL validation (http/https only)
 - [ ] Resilient click publishing, so a Kafka outage never affects redirects
 - [ ] Unit and integration tests
 - [x] Swagger / OpenAPI documentation

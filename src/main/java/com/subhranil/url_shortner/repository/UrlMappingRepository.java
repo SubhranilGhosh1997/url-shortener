@@ -10,6 +10,8 @@ import java.util.Optional;
 public interface UrlMappingRepository extends JpaRepository<UrlMapping, Long> {
     Optional<UrlMapping> findByShortCode(String shortCode);
 
+    Optional<UrlMapping> findFirstByOriginalUrlAndShortCodeIsNotNullOrderByIdAsc(String originalUrl);
+
     // Skips rows whose code was never set (saved once, then the second save failed).
     Page<UrlMapping> findByShortCodeIsNotNull(Pageable pageable);
 

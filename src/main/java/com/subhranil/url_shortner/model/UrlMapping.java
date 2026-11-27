@@ -7,6 +7,8 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 
 @Entity
+// Speeds up "was this URL shortened before?" in UrlService.shortenUrl. Not unique: older duplicates exist.
+@Table(indexes = @Index(name = "idx_url_mapping_original_url", columnList = "originalUrl"))
 @Data
 @NoArgsConstructor
 public class UrlMapping {
