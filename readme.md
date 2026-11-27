@@ -153,6 +153,32 @@ Response:
 }
 ```
 
+### List all short links
+
+`GET /api/urls?page=0&size=20` returns links newest first, with click counts. `size` is capped at 100. This endpoint is currently public, so anyone can see every link. It will be limited to the signed-in user's own links once accounts are added.
+
+```bash
+curl "http://localhost:8081/api/urls?page=0&size=2"
+```
+
+```json
+{
+  "items": [
+    {
+      "shortCode": "tJvSh8k",
+      "shortUrl": "http://localhost:8081/tJvSh8k",
+      "originalUrl": "https://www.wikipedia.org",
+      "totalClicks": 2,
+      "createdAt": "2026-11-27T07:06:46.359157"
+    }
+  ],
+  "page": 0,
+  "size": 2,
+  "totalElements": 11,
+  "totalPages": 6
+}
+```
+
 ### Errors
 
 An unknown short code returns `404`:
@@ -227,7 +253,8 @@ url-shortener/
 - [ ] Stricter URL validation (http/https only)
 - [ ] Resilient click publishing, so a Kafka outage never affects redirects
 - [ ] Unit and integration tests
-- [ ] Swagger / OpenAPI documentation
+- [x] Swagger / OpenAPI documentation
+- [ ] User accounts, so each user lists only their own links
 - [ ] Persist Redis click counters across restarts
 
 ---
