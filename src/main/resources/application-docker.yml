@@ -17,6 +17,9 @@ spring:
       port: 6379
   kafka:
     bootstrap-servers: url-shortner-kafka-1:9092
+    listener:
+      # Started by KafkaListenerStarter once Kafka is reachable, so a Kafka outage can't stop the app booting.
+      auto-startup: false
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
