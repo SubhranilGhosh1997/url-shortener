@@ -11,7 +11,7 @@ Redirects are served from a Redis cache. Click tracking runs asynchronously thro
 | Layer | Technology | Why it's here |
 |---|---|---|
 | API | Java 21, Spring Boot | REST endpoints, business logic |
-| Database | PostgreSQL 16 | Permanent source of truth for URL mappings |
+| Database | PostgreSQL 16 + Flyway | Permanent source of truth for URL mappings; schema changes are versioned SQL migrations |
 | Cache + counters | Redis 7 | Fast redirect lookups (cache-aside) and atomic click counters (`INCR`) |
 | Messaging | Apache Kafka | Decouples the redirect from click analytics processing |
 | Packaging | Docker, Docker Compose | One command starts the whole stack |
@@ -242,7 +242,8 @@ url-shortener/
     │   └── exception/    GlobalExceptionHandler, ErrorResponse, ResourceNotFoundException
     └── resources/
         ├── application.yml          # local profile (services on localhost)
-        └── application-docker.yml   # used inside Docker Compose
+        ├── application-docker.yml   # used inside Docker Compose
+        └── db/migration/            # Flyway SQL migrations (V1__create_url_mapping.sql, ...)
 ```
 
 ---

@@ -6,9 +6,9 @@ import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 
+// The schema is owned by Flyway (db/migration/V*__*.sql); Hibernate only validates against it.
+// Constraints and indexes live in the SQL, not in annotations here.
 @Entity
-// Speeds up "was this URL shortened before?" in UrlService.shortenUrl. Not unique: older duplicates exist.
-@Table(indexes = @Index(name = "idx_url_mapping_original_url", columnList = "originalUrl"))
 @Data
 @NoArgsConstructor
 public class UrlMapping {
@@ -17,12 +17,12 @@ public class UrlMapping {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(unique = true)
     private String shortCode;
 
     @Column(nullable = false, length = 2048)
     private String originalUrl;
 
+    @Column(nullable = false)
     private LocalDateTime createdAt;
 
 }
