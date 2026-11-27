@@ -24,7 +24,7 @@ import java.util.List;
 public class UrlService {
 
     private static final String CACHE_PREFIX = "url:";
-    private static final String CLICK_PREFIX = "clicks:";
+    private static final String CLICK_PREFIX = ClickCounter.KEY_PREFIX;
 
     private final UrlMappingRepository repository;
     private final StringRedisTemplate redisTemplate;
@@ -116,7 +116,6 @@ public class UrlService {
     }
 
     public void recordClick(String shortCode) {
-//        redisTemplate.opsForValue().increment(CLICK_PREFIX + shortCode);
         clickEventProducer.publish(shortCode);
     }
 
