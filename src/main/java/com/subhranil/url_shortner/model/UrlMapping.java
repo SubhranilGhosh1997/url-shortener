@@ -19,6 +19,10 @@ public class UrlMapping {
 
     private String shortCode;
 
+    /** Owner (users.id, from the JWT "sub"). No JPA relation on purpose: see V3 migration. */
+    @Column(nullable = false)
+    private Long userId;
+
     @Column(nullable = false, length = 2048)
     private String originalUrl;
 

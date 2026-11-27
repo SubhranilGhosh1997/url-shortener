@@ -11,6 +11,7 @@ Redirects are served from a Redis cache. Click tracking runs asynchronously thro
 | Layer | Technology | Why it's here |
 |---|---|---|
 | API | Java 21, Spring Boot | REST endpoints, business logic |
+| Security | Spring Security, JWT (RS256), BCrypt | Accounts and stateless login; every link has an owner |
 | Database | PostgreSQL 16 + Flyway | Permanent source of truth for URL mappings; schema changes are versioned SQL migrations |
 | Cache + counters | Redis 7 | Fast redirect lookups (cache-aside) and atomic click counters (`INCR`) |
 | Messaging | Apache Kafka | Decouples the redirect from click analytics processing |
@@ -89,6 +90,19 @@ Wait until the logs show the app has started and the Kafka consumer has joined t
 | Redis | `my-redis` | 6379 |
 | Kafka | `url-shortner-kafka-1` | 9092 |
 
+### JWT signing keys
+
+Out of the box, the app generates a temporary RSA key pair at startup and logs a warning. That's fine for local development, but every restart logs everyone out. To keep tokens valid across restarts, create a key pair once and put it in a `.env` file next to `docker-compose.yml` (`.env` and `*.pem` are git-ignored, so never commit them):
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt-private.pem
+openssl pkey -in jwt-private.pem -pubout -out jwt-public.pem
+
+# .env: one line per key with the line breaks removed (the app ignores whitespace in the PEM)
+printf 'APP_JWT_PRIVATE_KEY=%s\n' "$(tr -d '\r\n' < jwt-private.pem)" >  .env
+printf 'APP_JWT_PUBLIC_KEY=%s\n'  "$(tr -d '\r\n' < jwt-public.pem)"  >> .env
+```
+
 ### Stop it
 
 ```bash
@@ -102,16 +116,60 @@ docker-compose down -v     # stop containers and delete the PostgreSQL volume
 
 Base URL: `http://localhost:8081`
 
-**Swagger UI:** [http://localhost:8081/swagger-ui.html](http://localhost:8081/swagger-ui.html) (OpenAPI JSON at `/v3/api-docs`). `GET /{code}` is hidden from Swagger, because a browser `fetch` follows the `302` to the external site and fails CORS. In Swagger, use `GET /api/preview/{code}` to see where a link points without counting a click. To follow a link for real, open the short URL in a browser tab or use `curl -i`.
+**Swagger UI:** [http://localhost:8081/swagger-ui.html](http://localhost:8081/swagger-ui.html) (OpenAPI JSON at `/v3/api-docs`). Register or log in, copy the `accessToken`, click **Authorize** and paste it; every call then sends the token. `GET /{code}` is hidden from Swagger, because a browser `fetch` follows the `302` to the external site and fails CORS. In Swagger, use `GET /api/preview/{code}` to see where a link points without counting a click. To follow a link for real, open the short URL in a browser tab or use `curl -i`.
+
+### Authentication
+
+Accounts use email + password and stateless **JWT** access tokens (RS256, valid for 1 hour). Send the token on every call except the public ones:
+
+```
+Authorization: Bearer <accessToken>
+```
+
+| Public (no token) | Needs a token |
+|---|---|
+| `POST /api/auth/register`, `POST /api/auth/login` | `POST /api/shorten` |
+| `GET /{code}` (the redirect itself) | `GET /api/urls`, `DELETE /api/urls/{code}` |
+| `GET /api/preview/{code}` | `GET /api/analytics/{code}`, `GET /api/auth/me` |
+
+Links belong to the user who created them. Listing, analytics and deleting only ever see **your own** links; someone else's link answers `404`, as if it didn't exist.
+
+**Sign up** (`POST /api/auth/register`, returns `201`) or **log in** (`POST /api/auth/login`):
+
+```bash
+curl -X POST http://localhost:8081/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@example.com","password":"correct-horse-battery"}'
+```
+
+```json
+{
+  "accessToken": "eyJhbGciOiJSUzI1NiJ9...",
+  "tokenType": "Bearer",
+  "expiresIn": 3600,
+  "userId": 1,
+  "email": "alice@example.com"
+}
+```
+
+Passwords must be 8–72 characters and are stored only as BCrypt hashes. Emails are case-insensitive. A wrong password and an unknown email both return the same `401 Invalid email or password`. An email that's already registered returns `409`.
+
+The examples below assume the token is in a shell variable:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8081/api/auth/login -H "Content-Type: application/json" \
+  -d '{"email":"alice@example.com","password":"correct-horse-battery"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+```
 
 ### Shorten a URL
 
 `POST /api/shorten`
 
-Each URL gets one short link. If you shorten a URL that was shortened before, you get the existing short link back. URLs are normalized first, so `https://github.com`, `https://github.com/` and `HTTPS://GitHub.com:443/` all count as the same link. Paths and query strings are kept as-is. Only `http://` and `https://` URLs are accepted; anything else returns `400`.
+Each URL gets one short link per user. If you shorten a URL you shortened before, you get your existing short link back; another user shortening the same URL gets their own link and their own click count. URLs are normalized first, so `https://github.com`, `https://github.com/` and `HTTPS://GitHub.com:443/` all count as the same link. Paths and query strings are kept as-is. Only `http://` and `https://` URLs are accepted; anything else returns `400`.
 
 ```bash
 curl -X POST http://localhost:8081/api/shorten \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"url":"https://www.google.com/search?q=spring+boot+kafka+redis"}'
 ```
@@ -130,7 +188,7 @@ Response:
 
 ### Follow a short link
 
-`GET /{code}` returns `302 Found` with a `Location` header pointing at the original URL.
+`GET /{code}` is public and returns `302 Found` with a `Location` header pointing at the original URL.
 
 ```bash
 curl -i http://localhost:8081/tJvSh8k
@@ -138,10 +196,10 @@ curl -i http://localhost:8081/tJvSh8k
 
 ### Get click analytics
 
-`GET /api/analytics/{code}`
+`GET /api/analytics/{code}` (your own links only)
 
 ```bash
-curl http://localhost:8081/api/analytics/tJvSh8k
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/analytics/tJvSh8k
 ```
 
 Response:
@@ -155,12 +213,12 @@ Response:
 }
 ```
 
-### List all short links
+### List my short links
 
-`GET /api/urls?page=0&size=20` returns links newest first, with click counts. `size` is capped at 100. This endpoint is currently public, so anyone can see every link. It will be limited to the signed-in user's own links once accounts are added.
+`GET /api/urls?page=0&size=20` returns your links, newest first, with click counts. `size` is capped at 100.
 
 ```bash
-curl "http://localhost:8081/api/urls?page=0&size=2"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8081/api/urls?page=0&size=2"
 ```
 
 ```json
@@ -181,9 +239,17 @@ curl "http://localhost:8081/api/urls?page=0&size=2"
 }
 ```
 
+### Delete a short link
+
+`DELETE /api/urls/{code}` returns `204`. The short URL stops working immediately, its click count is removed, and the code is never handed out again.
+
+```bash
+curl -X DELETE -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/urls/tJvSh8k
+```
+
 ### Errors
 
-An unknown short code returns `404`:
+Every error uses the same shape. An unknown short code (or someone else's) returns `404`:
 
 ```json
 {
@@ -193,22 +259,28 @@ An unknown short code returns `404`:
 }
 ```
 
+A missing, invalid or expired token returns `401` with a message saying which.
+
 ---
 
 ## Try the full pipeline
 
 ```bash
-# 1. Shorten a URL
-curl -X POST http://localhost:8081/api/shorten -H "Content-Type: application/json" \
-  -d '{"url":"https://www.google.com"}'
+# 1. Sign up and keep the token
+TOKEN=$(curl -s -X POST http://localhost:8081/api/auth/register -H "Content-Type: application/json" \
+  -d '{"email":"me@example.com","password":"my-password-123"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
 
-# 2. Click the short link a few times
+# 2. Shorten a URL (note the shortCode in the response, e.g. tJvSh8k)
+curl -X POST http://localhost:8081/api/shorten -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"url":"https://www.google.com"}'
+
+# 3. Click the short link a few times (public, no token)
 curl -i http://localhost:8081/tJvSh8k
 curl -i http://localhost:8081/tJvSh8k
 curl -i http://localhost:8081/tJvSh8k
 
-# 3. Check the click count
-curl http://localhost:8081/api/analytics/tJvSh8k      # totalClicks: 3
+# 4. Check the click count
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8081/api/analytics/tJvSh8k      # totalClicks: 3
 ```
 
 To watch the cache and the event pipeline directly:
@@ -234,11 +306,14 @@ url-shortener/
 ├── pom.xml
 └── src/main/
     ├── java/com/subhranil/url_shortner/
+    │   ├── auth/         Accounts: AuthController, AuthService, TokenService, AppUser (self-contained module)
+    │   ├── security/     SecurityConfig, JwtConfig (RS256 keys), CurrentUser
     │   ├── controller/   UrlController
-    │   ├── service/      UrlService, ClickEventProducer, ClickEventConsumer
+    │   ├── service/      UrlService, ClickEventProducer, ClickEventConsumer, KafkaCircuitBreaker, ...
     │   ├── repository/   UrlMappingRepository
     │   ├── model/        UrlMapping, ClickEvent
-    │   ├── dto/          ShortenRequest, ShortenResponse, AnalyticsResponse
+    │   ├── dto/          ShortenRequest, ShortenResponse, AnalyticsResponse, UrlSummary, PagedResponse
+    │   ├── config/       OpenApiConfig, KafkaListenerStarter
     │   └── exception/    GlobalExceptionHandler, ErrorResponse, ResourceNotFoundException
     └── resources/
         ├── application.yml          # local profile (services on localhost)
@@ -257,7 +332,9 @@ url-shortener/
 - [x] Resilient click publishing, so a Kafka outage never affects redirects
 - [ ] Unit and integration tests
 - [x] Swagger / OpenAPI documentation
-- [ ] User accounts, so each user lists only their own links
+- [x] User accounts, so each user lists only their own links
+- [ ] Password reset and email verification
+- [ ] Refresh tokens (access tokens currently expire after 1 hour)
 - [ ] Persist Redis click counters across restarts
 
 ---
