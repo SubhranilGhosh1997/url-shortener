@@ -102,6 +102,8 @@ docker-compose down -v     # stop containers and delete the PostgreSQL volume
 
 Base URL: `http://localhost:8081`
 
+**Swagger UI:** [http://localhost:8081/swagger-ui.html](http://localhost:8081/swagger-ui.html) (OpenAPI JSON at `/v3/api-docs`). `GET /{code}` is hidden from Swagger, because a browser `fetch` follows the `302` to the external site and fails CORS. In Swagger, use `GET /api/preview/{code}` to see where a link points without counting a click. To follow a link for real, open the short URL in a browser tab or use `curl -i`.
+
 ### Shorten a URL
 
 `POST /api/shorten`

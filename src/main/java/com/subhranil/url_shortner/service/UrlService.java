@@ -62,6 +62,10 @@ public class UrlService {
         return mapping.getOriginalUrl();
     }
 
+    public ShortenResponse preview(String shortCode) {
+        return new ShortenResponse(shortCode, baseUrl + shortCode, resolveUrl(shortCode));
+    }
+
     public void recordClick(String shortCode) {
 //        redisTemplate.opsForValue().increment(CLICK_PREFIX + shortCode);
         clickEventProducer.publish(shortCode);
