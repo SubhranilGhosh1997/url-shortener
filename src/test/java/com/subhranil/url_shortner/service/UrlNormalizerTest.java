@@ -5,8 +5,11 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import org.junit.jupiter.api.Test;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class UrlNormalizerTest {
 
@@ -47,5 +50,37 @@ class UrlNormalizerTest {
     })
     void rejectsInvalidUrls(String input) {
         assertThrows(InvalidUrlException.class, () -> normalizer.normalize(input));
+    }
+
+    @Test
+    void acceptsUrlOfExactlyMaxLength() {
+        String url = urlOfLength(UrlNormalizer.MAX_LENGTH);
+        assertEquals(url, normalizer.normalize(url));
+    }
+
+    @Test
+    void rejectsUrlOneCharacterTooLong() {
+        InvalidUrlException ex = assertThrows(InvalidUrlException.class,
+                () -> normalizer.normalize(urlOfLength(UrlNormalizer.MAX_LENGTH + 1)));
+        assertEquals("URL is too long: 2049 characters (maximum 2048)", ex.getMessage());
+    }
+
+    @Test
+    void surroundingWhitespaceDoesNotCountTowardsTheLimit() {
+        String url = urlOfLength(UrlNormalizer.MAX_LENGTH);
+        assertEquals(url, normalizer.normalize("   " + url + "\n"));
+    }
+
+    @Test
+    void rejectsHugeInputWithoutTryingToParseIt() {
+        String huge = "https://example.com/" + "a".repeat(5_000_000) + " not a url";
+        InvalidUrlException ex = assertThrows(InvalidUrlException.class, () -> normalizer.normalize(huge));
+        assertTrue(ex.getMessage().startsWith("URL is too long"));
+    }
+
+    /** A valid, already-normalized URL of exactly {@code length} characters. */
+    static String urlOfLength(int length) {
+        String prefix = "https://example.com/";
+        return prefix + "a".repeat(length - prefix.length());
     }
 }

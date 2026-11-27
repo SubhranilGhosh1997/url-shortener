@@ -25,9 +25,19 @@ import java.util.Locale;
 @Component
 public class UrlNormalizer {
 
+    /**
+     * Longest URL we store. Must match url_mapping.original_url VARCHAR(2048) (V1 migration); a longer value
+     * would fail in the database with a 500. 2048 is also the practical limit of most browsers and servers.
+     */
+    public static final int MAX_LENGTH = 2048;
+
     public String normalize(String raw) {
         if (raw == null || raw.isBlank()) {
             throw new InvalidUrlException("URL must not be blank");
+        }
+        // Checked before parsing, so huge inputs are rejected cheaply. Normalizing never makes a URL longer.
+        if (raw.trim().length() > MAX_LENGTH) {
+            throw new InvalidUrlException(tooLongMessage(raw.trim().length()));
         }
         URI uri;
         try {
@@ -67,5 +77,9 @@ public class UrlNormalizer {
             url.append('#').append(uri.getRawFragment());
         }
         return url.toString();
+    }
+
+    static String tooLongMessage(int length) {
+        return "URL is too long: " + length + " characters (maximum " + MAX_LENGTH + ")";
     }
 }
