@@ -9,7 +9,9 @@ spring:
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
-      ddl-auto: update
+      # Flyway owns the schema (db/migration). Hibernate only checks the entities match it and refuses
+      # to start if they do not. Never switch back to update/create.
+      ddl-auto: validate
     show-sql: true
   data:
     redis:
