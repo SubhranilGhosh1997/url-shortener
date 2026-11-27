@@ -1,8 +1,22 @@
 # URL Shortener
 
-A URL shortener REST API with click analytics, built with **Java 21**, **Spring Boot**, **PostgreSQL**, **Redis** and **Apache Kafka**, and fully containerized with **Docker Compose**.
+A URL shortener REST API with user accounts and click analytics, built with **Java 21**, **Spring Boot 4**, **Spring Security (JWT)**, **PostgreSQL**, **Redis** and **Apache Kafka**, and fully containerized with **Docker Compose**.
 
-Redirects are served from a Redis cache. Click tracking runs asynchronously through Kafka, so the redirect never waits on analytics processing.
+Redirects are served from a Redis cache. Click tracking runs asynchronously through Kafka, so the redirect never waits on analytics processing, and keeps working even when Kafka is down.
+
+---
+
+## Features
+
+- **Accounts and JWT login:** sign up with email and password and get a stateless RS256 access token. Every short link belongs to its creator.
+- **Short, random-looking codes** such as `tJvSh8k`, which don't reveal how many links exist.
+- **One link per URL per user:** shortening the same URL again returns your existing link. URLs are normalized first, so `https://github.com` and `HTTPS://GitHub.com:443/` count as the same.
+- **Manage your links:** list them (paginated, with click counts), view analytics for each, and delete them.
+- **Fast public redirects** from a Redis cache, with clicks counted asynchronously through Kafka.
+- **Resilient to Kafka outages:** a 500 ms cap, a Redis fallback and a circuit breaker keep redirects fast and clicks counted. The app even starts without Kafka and reconnects on its own.
+- **Versioned database schema** with Flyway migrations.
+- **Interactive API docs** in Swagger UI, with an **Authorize** button for your token.
+- **63 automated tests**, covering the security rules, token signing and verification, short-code generation, URL normalization and the Kafka fallback.
 
 ---
 
@@ -22,39 +36,45 @@ Redirects are served from a Redis cache. Click tracking runs asynchronously thro
 ## Architecture
 
 ```
-                     POST /api/shorten
-   Client ─────────────────────────────────▶ ┌───────────────────┐
-                                             │                   │──save──▶ PostgreSQL
-                                             │   Spring Boot     │
-                                             │   application     │──cache─▶ Redis  (url:{code})
-                                             │                   │
-   Client ──── GET /{code} ────────────────▶ │ 1. Check Redis    │
-          ◀─── 302 redirect ──────────────── │ 2. Fallback to DB │
-                                             │ 3. Publish event  │──event─▶ Kafka topic
-                                             └───────────────────┘          "url-click-events"
-                                                                                    │
-                                             ┌───────────────────┐                  │
-                                             │  Kafka consumer   │◀─────────────────┘
-                                             │  (analytics-group)│
-                                             │  INCR clicks:{code}──────▶ Redis
-                                             └───────────────────┘
+   Client ── POST /api/auth/register|login ─▶ ┌──────────────────────┐
+          ◀── JWT (RS256, 1 h) ────────────── │                      │──users──▶ PostgreSQL
+                                              │   Spring Boot app    │           (schema by Flyway)
+   Client ── POST /api/shorten  + JWT ──────▶ │                      │──links──▶ PostgreSQL
+                                              │  Spring Security     │──cache──▶ Redis  url:{code}
+                                              │  checks every token  │
+   Client ── GET /{code}  (public) ─────────▶ │  1. Check Redis      │
+          ◀── 302 redirect ────────────────── │  2. Fallback to DB   │
+                                              │  3. Publish click    │──event──▶ Kafka "url-click-events"
+                                              └──────────────────────┘    │            │
+                                                 Kafka down? count the    │            ▼
+                                                 click in Redis directly ─┘   ┌──────────────────────┐
+                                                 (circuit breaker)            │ Kafka consumer       │
+                                                                              │ (analytics-group)    │
+                                                                              │ INCR clicks:{code} ──┼─▶ Redis
+                                                                              └──────────────────────┘
 
-   Client ──── GET /api/analytics/{code} ──▶ reads clicks:{code} from Redis
+   Client ── GET /api/urls | /api/analytics/{code} | DELETE /api/urls/{code}  + JWT
+             → only the caller's own links (others get 404); click counts read from Redis
 ```
 
 ### How it works
 
-1. **Shorten:** the URL is validated and normalized. If it was shortened before, the existing code is returned. Otherwise it is saved to PostgreSQL. The generated row ID is scrambled into a random-looking 7-character Base62 short code (for example `tJvSh8k`), and the mapping is written to Redis.
-2. **Redirect:** the app looks in Redis first (cache-aside). On a miss it reads PostgreSQL and repopulates the cache. It then publishes a click event to Kafka and returns an HTTP `302`.
-3. **Count clicks:** a Kafka consumer reads each event and runs an atomic `INCR` on a Redis counter for that short code.
-4. **Analytics:** the analytics endpoint reads the counter from Redis.
+1. **Sign up / log in:** the password is checked against its BCrypt hash, and the app returns a signed JWT whose subject is the user ID. Every protected call is verified against the public key, without any database lookup.
+2. **Shorten:** the URL is validated and normalized. If you shortened it before, your existing code is returned. Otherwise it is saved to PostgreSQL with you as owner, the generated row ID is scrambled into a random-looking 7-character Base62 short code (for example `tJvSh8k`), and the mapping is written to Redis.
+3. **Redirect:** public, no token. The app looks in Redis first (cache-aside). On a miss it reads PostgreSQL and repopulates the cache. It then publishes a click event to Kafka and returns an HTTP `302`.
+4. **Count clicks:** a Kafka consumer reads each event and runs an atomic `INCR` on a Redis counter for that short code. If Kafka is unavailable, the click is counted in Redis directly.
+5. **Manage:** listing, analytics and deleting only ever touch the caller's own links. Deleting also removes the link's cache entry and click counter.
 
 ### Design decisions
 
+- **Stateless JWT with RS256:** tokens are signed with a private key and verified with the public key, so no session storage is needed and any instance can check a token. Accounts live in a self-contained `auth` module that the rest of the code never imports, so it could move into its own user service; the link service would only need the public key.
+- **Ownership comes only from the token:** the user ID is never read from the request body. Someone else's link answers `404` rather than `403`, so links can't be probed.
+- **Flyway for the schema:** every schema change is a versioned SQL migration, and Hibernate only validates the entities against it (`ddl-auto: validate`), so the app refuses to start if code and database disagree.
 - **Cache-aside with Redis:** the redirect is the hottest path. Serving it from memory keeps PostgreSQL out of the common case.
 - **Kafka for analytics:** counting a click is a side effect, not part of the redirect. Publishing an event lets the two run independently. If Kafka is unavailable, publishing gives up after 500 ms and the click is counted directly in Redis instead. A circuit breaker then skips Kafka for 30 seconds at a time, so during an outage redirects stay as fast as normal. The app also starts and runs without Kafka, and reconnects by itself when Kafka is back.
 - **Redis `INCR` for counters:** the increment is atomic, so concurrent clicks can't corrupt the count.
 - **Scrambled IDs as short codes:** the database ID goes through a one-to-one scramble (a Feistel permutation) and is Base62-encoded to 7 characters. Codes look random and don't reveal how many links exist, but they are still unique by construction, so there are no collision checks.
+- **Conservative URL normalization:** only changes that can't alter the page are made (lowercase scheme and host, default ports, a bare trailing `/`). Paths, query strings and fragments are kept exactly, because `/docs` and `/docs/` can be different pages.
 
 ---
 
@@ -79,7 +99,13 @@ cd url-shortener
 docker-compose up --build
 ```
 
-Wait until the logs show the app has started and the Kafka consumer has joined the `analytics-group`. The first start takes a minute or two because images are downloaded.
+Wait until the logs show the app has started and the Kafka consumer has joined the `analytics-group`. The first start takes a minute or two because images are downloaded. The database schema is created automatically by Flyway on first start.
+
+Then open **[http://localhost:8081/swagger-ui.html](http://localhost:8081/swagger-ui.html)**:
+
+1. Run `POST /api/auth/register` with an email and a password (8+ characters), and copy `accessToken` from the response.
+2. Click **Authorize** at the top, paste the token, and confirm.
+3. Try `POST /api/shorten`, then open the returned `shortUrl` in a new tab and check `GET /api/urls` for the click count.
 
 ### Services and ports
 
@@ -109,6 +135,25 @@ printf 'APP_JWT_PUBLIC_KEY=%s\n'  "$(tr -d '\r\n' < jwt-public.pem)"  >> .env
 docker-compose down        # stop containers, keep PostgreSQL data
 docker-compose down -v     # stop containers and delete the PostgreSQL volume
 ```
+
+### Running tests
+
+The unit and web-layer tests need no running services:
+
+```bash
+./mvnw test -Dtest="*Test,!UrlShortnerApplicationTests" -Dsurefire.failIfNoSpecifiedTests=false
+```
+
+| Test class | What it checks |
+|---|---|
+| `SecurityRulesTest` | Which endpoints are public, `401` without a valid token, user ID taken from the token, `404` for other users' links |
+| `JwtRoundTripTest` | Tokens verify with the right key; forged, expired and wrong-issuer tokens are rejected; PEM keys load |
+| `AuthServiceTest` | Registration, duplicate emails, password hashing, identical errors for unknown email and wrong password |
+| `ShortCodeGeneratorTest` | 7-character codes, no duplicates across a million IDs, no visible pattern |
+| `UrlNormalizerTest` | Which URL variants count as the same link, and which inputs are rejected |
+| `ClickEventProducerTest`, `KafkaCircuitBreakerTest`, `KafkaListenerStarterTest` | The Kafka fallback, the circuit breaker and the background consumer start |
+
+`UrlShortnerApplicationTests` starts the full application and needs PostgreSQL, Redis and Kafka on `localhost`, so it is excluded above.
 
 ---
 
@@ -304,6 +349,7 @@ url-shortener/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── pom.xml
+├── src/test/                # unit and web-layer tests (see "Running tests")
 └── src/main/
     ├── java/com/subhranil/url_shortner/
     │   ├── auth/         Accounts: AuthController, AuthService, TokenService, AppUser (self-contained module)
@@ -330,7 +376,9 @@ url-shortener/
 - [ ] Rate limiting per client with Redis
 - [x] Stricter URL validation (http/https only)
 - [x] Resilient click publishing, so a Kafka outage never affects redirects
-- [ ] Unit and integration tests
+- [x] Unit and web-layer tests
+- [ ] Integration tests with Testcontainers (real PostgreSQL, Redis and Kafka)
+- [x] Versioned database migrations (Flyway)
 - [x] Swagger / OpenAPI documentation
 - [x] User accounts, so each user lists only their own links
 - [ ] Password reset and email verification
