@@ -50,6 +50,8 @@ services:
       # Left empty, the app generates a temporary key pair and every restart invalidates all tokens.
       APP_JWT_PRIVATE_KEY: ${APP_JWT_PRIVATE_KEY:-}
       APP_JWT_PUBLIC_KEY: ${APP_JWT_PUBLIC_KEY:-}
+      # Log level for the app's own code. DEBUG shows each redirect, cache hit/miss and counted click.
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
     depends_on:
       - postgres
       - redis

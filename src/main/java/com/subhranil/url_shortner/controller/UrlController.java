@@ -18,6 +18,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -28,6 +29,7 @@ import java.net.URI;
 
 @RestController
 @RequiredArgsConstructor
+@Slf4j
 @Tag(name = "URL Shortener", description = "Everything except preview needs a token: log in, then use Authorize.")
 public class UrlController {
 
@@ -52,8 +54,8 @@ public class UrlController {
     @Hidden
     @GetMapping("/{code}")
     public ResponseEntity<Void> redirect(@PathVariable String code) {
-        System.out.println(">>> REDIRECT REQUEST received for code: " + code);
         String url = urlService.resolveUrl(code);
+        log.debug("Redirect {} -> {}", code, url);
         urlService.recordClick(code);
         return ResponseEntity.status(HttpStatus.FOUND)
                 .location(URI.create(url))

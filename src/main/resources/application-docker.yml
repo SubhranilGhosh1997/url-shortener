@@ -12,7 +12,7 @@ spring:
       # Flyway owns the schema (db/migration). Hibernate only checks the entities match it and refuses
       # to start if they do not. Never switch back to update/create.
       ddl-auto: validate
-    show-sql: true
+    show-sql: false
   data:
     redis:
       host: my-redis
@@ -43,3 +43,12 @@ spring:
 
 app:
   base-url: http://localhost:8081/
+
+logging:
+  level:
+    # Kafka clients log their whole config (~400 lines) at INFO on every start; keep warnings and errors.
+    org.apache.kafka: warn
+    # Per-click and cache hit/miss logs are DEBUG; set APP_LOG_LEVEL=DEBUG to see them.
+    com.subhranil.url_shortner: ${APP_LOG_LEVEL:INFO}
+    # application.yml (always loaded) turns SQL logging on for local runs; keep it off in Docker.
+    org.hibernate.SQL: info

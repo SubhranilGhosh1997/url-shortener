@@ -336,8 +336,9 @@ docker exec -it my-redis redis-cli
 GET url:tJvSh8k
 GET clicks:tJvSh8k
 
-# Follow the app logs to see the Kafka consumer processing each click
-docker-compose logs -f app
+# Follow the app logs. Per-click logs are DEBUG, so restart the app with debug logging first:
+APP_LOG_LEVEL=DEBUG docker-compose up -d app
+docker-compose logs -f app      # "Redirect ... -> ...", "Cache hit for ...", "Counted click for ..."
 ```
 
 ---
