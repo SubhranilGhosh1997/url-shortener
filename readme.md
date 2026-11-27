@@ -210,7 +210,7 @@ TOKEN=$(curl -s -X POST http://localhost:8081/api/auth/login -H "Content-Type: a
 
 `POST /api/shorten`
 
-Each URL gets one short link per user. If you shorten a URL you shortened before, you get your existing short link back; another user shortening the same URL gets their own link and their own click count. URLs are normalized first, so `https://github.com`, `https://github.com/` and `HTTPS://GitHub.com:443/` all count as the same link. Paths and query strings are kept as-is. Only `http://` and `https://` URLs are accepted; anything else returns `400`.
+Each URL gets one short link per user. If you shorten a URL you shortened before, you get your existing short link back; another user shortening the same URL gets their own link and their own click count. URLs are normalized first, so `https://github.com`, `https://github.com/` and `HTTPS://GitHub.com:443/` all count as the same link. Paths and query strings are kept as-is. Only `http://` and `https://` URLs of up to 2,048 characters are accepted; anything else returns `400` with a message saying why.
 
 ```bash
 curl -X POST http://localhost:8081/api/shorten \
