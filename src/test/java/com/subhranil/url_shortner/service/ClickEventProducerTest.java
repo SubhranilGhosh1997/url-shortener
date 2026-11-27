@@ -10,6 +10,7 @@ import org.springframework.kafka.support.SendResult;
 import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -18,6 +19,7 @@ class ClickEventProducerTest {
 
     private KafkaTemplate<String, ClickEvent> kafkaTemplate;
     private ClickCounter clickCounter;
+    private KafkaCircuitBreaker circuitBreaker;
     private ClickEventProducer producer;
 
     @BeforeEach
@@ -25,7 +27,34 @@ class ClickEventProducerTest {
     void setUp() {
         kafkaTemplate = mock(KafkaTemplate.class);
         clickCounter = mock(ClickCounter.class);
-        producer = new ClickEventProducer(kafkaTemplate, clickCounter);
+        circuitBreaker = new KafkaCircuitBreaker();
+        producer = new ClickEventProducer(kafkaTemplate, clickCounter, circuitBreaker);
+    }
+
+    @Test
+    void failureOpensCircuitSoNextClicksSkipKafka() {
+        when(kafkaTemplate.send(any(), any(), any())).thenThrow(new RuntimeException("kafka down"));
+
+        producer.publish("a");   // tries Kafka, fails, opens the circuit
+        producer.publish("b");   // skips Kafka entirely
+        producer.publish("c");
+
+        verify(kafkaTemplate, times(1)).send(any(), any(), any());
+        verify(clickCounter).increment("a");
+        verify(clickCounter).increment("b");
+        verify(clickCounter).increment("c");
+        assertTrue(circuitBreaker.isOpen());
+    }
+
+    @Test
+    void asyncFailureAlsoOpensCircuit() {
+        when(kafkaTemplate.send(any(), any(), any()))
+                .thenReturn(CompletableFuture.failedFuture(new TimeoutException("delivery timed out")));
+
+        producer.publish("abc");
+
+        verify(clickCounter, timeout(2000)).increment("abc");
+        assertTrue(circuitBreaker.isOpen());
     }
 
     @Test
