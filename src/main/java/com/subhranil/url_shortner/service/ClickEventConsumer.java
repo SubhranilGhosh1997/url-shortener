@@ -16,7 +16,6 @@ public class ClickEventConsumer {
     @KafkaListener(topics = ClickEventProducer.TOPIC, groupId = "analytics-group")
     public void consume(ClickEvent event) {
         clickCounter.increment(event.getShortCode());
-        log.info(">>> Kafka consumer processed click for shortCode={}",
-                event.getShortCode());
+        log.debug("Counted click for {}", event.getShortCode());
     }
 }

@@ -11,6 +11,7 @@ import com.subhranil.url_shortner.exception.ResourceNotFoundException;
 import com.subhranil.url_shortner.model.UrlMapping;
 import com.subhranil.url_shortner.repository.UrlMappingRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -27,6 +28,7 @@ import java.util.List;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class UrlService {
 
     private static final String CACHE_PREFIX = "url:";
@@ -75,12 +77,12 @@ public class UrlService {
         // check Redis first
         String cached = redisTemplate.opsForValue().get(CACHE_PREFIX + shortCode);
         if (cached != null) {
-            System.out.println(">>> CACHE HIT for: " + shortCode);
+            log.debug("Cache hit for {}", shortCode);
             return cached;
         }
 
         // fallback to database
-        System.out.println(">>> CACHE MISS - hitting database for: " + shortCode);
+        log.debug("Cache miss for {}, reading the database", shortCode);
         UrlMapping mapping = repository.findByShortCode(shortCode)
                 .orElseThrow(() -> new ResourceNotFoundException("Short URL not found: " + shortCode));
 
