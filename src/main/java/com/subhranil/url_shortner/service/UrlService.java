@@ -14,11 +14,17 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Short links. Every link has an owner ({@code userId}, taken from the caller's JWT). Redirects and
+ * previews are public; listing, analytics and deleting only ever see the caller's own links, and a link
+ * owned by someone else is reported as "not found" so its existence isn't revealed.
+ */
 @Service
 @RequiredArgsConstructor
 public class UrlService {
@@ -36,15 +42,14 @@ public class UrlService {
     private String baseUrl;
 
     /**
-     * Returns the existing short link if this URL (after normalizing) was shortened before, so each URL
-     * gets one code. When duplicates from before this rule exist, the oldest one wins.
+     * Returns the caller's existing short link if they shortened this URL (after normalizing) before, so
+     * each user gets one code per URL. Different users get separate links with separate click counts.
      * Not race-proof: two simultaneous requests for a new URL can still create two codes, which is harmless.
-     * Once user accounts exist, reuse should be per user (same URL + same owner).
      */
-    public ShortenResponse shortenUrl(String rawUrl) {
+    public ShortenResponse shortenUrl(long userId, String rawUrl) {
         String originalUrl = urlNormalizer.normalize(rawUrl);
 
-        var existing = repository.findFirstByOriginalUrlAndShortCodeIsNotNullOrderByIdAsc(originalUrl);
+        var existing = repository.findFirstByUserIdAndOriginalUrlAndShortCodeIsNotNullOrderByIdAsc(userId, originalUrl);
         if (existing.isPresent()) {
             String shortCode = existing.get().getShortCode();
             redisTemplate.opsForValue().set(CACHE_PREFIX + shortCode, originalUrl);
@@ -52,6 +57,7 @@ public class UrlService {
         }
 
         UrlMapping mapping = new UrlMapping();
+        mapping.setUserId(userId);
         mapping.setOriginalUrl(originalUrl);
         mapping.setCreatedAt(LocalDateTime.now());
         mapping = repository.save(mapping);
@@ -85,13 +91,13 @@ public class UrlService {
 
     public static final int MAX_PAGE_SIZE = 100;
 
-    /** Newest first. Click counts for the whole page come from Redis in one MGET. */
-    public PagedResponse<UrlSummary> listUrls(int page, int size) {
+    /** The caller's links, newest first. Click counts for the whole page come from Redis in one MGET. */
+    public PagedResponse<UrlSummary> listUrls(long userId, int page, int size) {
         int safePage = Math.max(page, 0);
         int safeSize = Math.min(Math.max(size, 1), MAX_PAGE_SIZE);
 
-        Page<UrlMapping> result = repository.findByShortCodeIsNotNull(
-                PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "id")));
+        Page<UrlMapping> result = repository.findByUserIdAndShortCodeIsNotNull(
+                userId, PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "id")));
         List<UrlMapping> mappings = result.getContent();
 
         List<String> clickKeys = mappings.stream().map(m -> CLICK_PREFIX + m.getShortCode()).toList();
@@ -119,20 +125,11 @@ public class UrlService {
         clickEventProducer.publish(shortCode);
     }
 
-    public AnalyticsResponse getAnalytics(String shortCode) {
+    public AnalyticsResponse getAnalytics(long userId, String shortCode) {
+        UrlMapping mapping = findOwned(userId, shortCode);
 
-        UrlMapping mapping = repository.findByShortCode(shortCode)
-                .orElseThrow(() ->
-                        new ResourceNotFoundException(
-                                "Short URL not found: " + shortCode
-                        ));
-
-        String clickCount = redisTemplate.opsForValue()
-                .get(CLICK_PREFIX + shortCode);
-
-        long totalClicks = clickCount != null
-                ? Long.parseLong(clickCount)
-                : 0L;
+        String clickCount = redisTemplate.opsForValue().get(CLICK_PREFIX + shortCode);
+        long totalClicks = clickCount != null ? Long.parseLong(clickCount) : 0L;
 
         return new AnalyticsResponse(
                 mapping.getShortCode(),
@@ -140,5 +137,24 @@ public class UrlService {
                 totalClicks,
                 mapping.getCreatedAt()
         );
+    }
+
+    /**
+     * Deletes the caller's link, its cached target and its click counter. The code is never handed out
+     * again, because codes come from database ids, which are never reused.
+     * A redirect already in flight may re-cache the target a moment after the delete; that entry then
+     * points at a deleted link until it is next overwritten. Rare, and harmless for a test-stage app.
+     */
+    @Transactional
+    public void deleteUrl(long userId, String shortCode) {
+        UrlMapping mapping = findOwned(userId, shortCode);
+        repository.delete(mapping);
+        redisTemplate.delete(List.of(CACHE_PREFIX + shortCode, CLICK_PREFIX + shortCode));
+    }
+
+    /** The caller's link, or 404 if it doesn't exist or belongs to someone else (same answer for both). */
+    private UrlMapping findOwned(long userId, String shortCode) {
+        return repository.findByShortCodeAndUserId(shortCode, userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Short URL not found: " + shortCode));
     }
 }
