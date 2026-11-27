@@ -43,7 +43,7 @@ Redirects are served from a Redis cache. Click tracking runs asynchronously thro
 
 ### How it works
 
-1. **Shorten:** the URL is saved to PostgreSQL. The generated row ID is Base62-encoded into the short code (for example ID `125` becomes `21`), and the mapping is written to Redis.
+1. **Shorten:** the URL is saved to PostgreSQL. The generated row ID is scrambled into a random-looking 7-character Base62 short code (for example `tJvSh8k`), and the mapping is written to Redis.
 2. **Redirect:** the app looks in Redis first (cache-aside). On a miss it reads PostgreSQL and repopulates the cache. It then publishes a click event to Kafka and returns an HTTP `302`.
 3. **Count clicks:** a Kafka consumer reads each event and runs an atomic `INCR` on a Redis counter for that short code.
 4. **Analytics:** the analytics endpoint reads the counter from Redis.
@@ -53,7 +53,7 @@ Redirects are served from a Redis cache. Click tracking runs asynchronously thro
 - **Cache-aside with Redis:** the redirect is the hottest path. Serving it from memory keeps PostgreSQL out of the common case.
 - **Kafka for analytics:** counting a click is a side effect, not part of the redirect. Publishing an event lets the two run independently.
 - **Redis `INCR` for counters:** the increment is atomic, so concurrent clicks can't corrupt the count.
-- **Base62 from the database ID:** short codes are unique by construction, with no collision checks.
+- **Scrambled IDs as short codes:** the database ID goes through a one-to-one scramble (a Feistel permutation) and is Base62-encoded to 7 characters. Codes look random and don't reveal how many links exist, but they are still unique by construction, so there are no collision checks.
 
 ---
 
@@ -118,8 +118,8 @@ Response:
 
 ```json
 {
-  "shortCode": "1",
-  "shortUrl": "http://localhost:8081/1",
+  "shortCode": "tJvSh8k",
+  "shortUrl": "http://localhost:8081/tJvSh8k",
   "originalUrl": "https://www.google.com/search?q=spring+boot+kafka+redis"
 }
 ```
@@ -131,7 +131,7 @@ Response:
 `GET /{code}` returns `302 Found` with a `Location` header pointing at the original URL.
 
 ```bash
-curl -i http://localhost:8081/1
+curl -i http://localhost:8081/tJvSh8k
 ```
 
 ### Get click analytics
@@ -139,14 +139,14 @@ curl -i http://localhost:8081/1
 `GET /api/analytics/{code}`
 
 ```bash
-curl http://localhost:8081/api/analytics/1
+curl http://localhost:8081/api/analytics/tJvSh8k
 ```
 
 Response:
 
 ```json
 {
-  "shortCode": "1",
+  "shortCode": "tJvSh8k",
   "originalUrl": "https://www.google.com/search?q=spring+boot+kafka+redis",
   "totalClicks": 3,
   "createdAt": "2026-10-01T06:58:23.36994"
@@ -175,12 +175,12 @@ curl -X POST http://localhost:8081/api/shorten -H "Content-Type: application/jso
   -d '{"url":"https://www.google.com"}'
 
 # 2. Click the short link a few times
-curl -i http://localhost:8081/1
-curl -i http://localhost:8081/1
-curl -i http://localhost:8081/1
+curl -i http://localhost:8081/tJvSh8k
+curl -i http://localhost:8081/tJvSh8k
+curl -i http://localhost:8081/tJvSh8k
 
 # 3. Check the click count
-curl http://localhost:8081/api/analytics/1      # totalClicks: 3
+curl http://localhost:8081/api/analytics/tJvSh8k      # totalClicks: 3
 ```
 
 To watch the cache and the event pipeline directly:
@@ -188,8 +188,8 @@ To watch the cache and the event pipeline directly:
 ```bash
 # See the cached URL and the click counter inside Redis
 docker exec -it my-redis redis-cli
-GET url:1
-GET clicks:1
+GET url:tJvSh8k
+GET clicks:tJvSh8k
 
 # Follow the app logs to see the Kafka consumer processing each click
 docker-compose logs -f app

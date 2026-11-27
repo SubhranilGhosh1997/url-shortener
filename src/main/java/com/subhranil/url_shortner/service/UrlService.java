@@ -16,15 +16,13 @@ import java.time.LocalDateTime;
 @RequiredArgsConstructor
 public class UrlService {
 
-    private static final String ALPHABET =
-            "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-
     private static final String CACHE_PREFIX = "url:";
     private static final String CLICK_PREFIX = "clicks:";
 
     private final UrlMappingRepository repository;
     private final StringRedisTemplate redisTemplate;
     private final ClickEventProducer clickEventProducer;
+    private final ShortCodeGenerator shortCodeGenerator;
 
     @Value("${app.base-url}")
     private String baseUrl;
@@ -35,7 +33,7 @@ public class UrlService {
         mapping.setCreatedAt(LocalDateTime.now());
         mapping = repository.save(mapping);
 
-        String shortCode = encodeBase62(mapping.getId());
+        String shortCode = shortCodeGenerator.generate(mapping.getId());
         mapping.setShortCode(shortCode);
         repository.save(mapping);
 
@@ -69,16 +67,6 @@ public class UrlService {
     public void recordClick(String shortCode) {
 //        redisTemplate.opsForValue().increment(CLICK_PREFIX + shortCode);
         clickEventProducer.publish(shortCode);
-    }
-
-    private String encodeBase62(long id) {
-        if (id == 0) return String.valueOf(ALPHABET.charAt(0));
-        StringBuilder sb = new StringBuilder();
-        while (id > 0) {
-            sb.append(ALPHABET.charAt((int) (id % 62)));
-            id /= 62;
-        }
-        return sb.reverse().toString();
     }
 
     public AnalyticsResponse getAnalytics(String shortCode) {
