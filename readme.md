@@ -51,7 +51,7 @@ Redirects are served from a Redis cache. Click tracking runs asynchronously thro
 ### Design decisions
 
 - **Cache-aside with Redis:** the redirect is the hottest path. Serving it from memory keeps PostgreSQL out of the common case.
-- **Kafka for analytics:** counting a click is a side effect, not part of the redirect. Publishing an event lets the two run independently.
+- **Kafka for analytics:** counting a click is a side effect, not part of the redirect. Publishing an event lets the two run independently. If Kafka is unavailable, publishing gives up after 500 ms and the click is counted directly in Redis instead. A circuit breaker then skips Kafka for 30 seconds at a time, so during an outage redirects stay as fast as normal. The app also starts and runs without Kafka, and reconnects by itself when Kafka is back.
 - **Redis `INCR` for counters:** the increment is atomic, so concurrent clicks can't corrupt the count.
 - **Scrambled IDs as short codes:** the database ID goes through a one-to-one scramble (a Feistel permutation) and is Base62-encoded to 7 characters. Codes look random and don't reveal how many links exist, but they are still unique by construction, so there are no collision checks.
 
@@ -253,7 +253,7 @@ url-shortener/
 - [ ] Custom short codes
 - [ ] Rate limiting per client with Redis
 - [x] Stricter URL validation (http/https only)
-- [ ] Resilient click publishing, so a Kafka outage never affects redirects
+- [x] Resilient click publishing, so a Kafka outage never affects redirects
 - [ ] Unit and integration tests
 - [x] Swagger / OpenAPI documentation
 - [ ] User accounts, so each user lists only their own links

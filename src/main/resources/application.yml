@@ -17,9 +17,20 @@ spring:
       port: 6379
   kafka:
     bootstrap-servers: localhost:9092
+    listener:
+      # Started by KafkaListenerStarter once Kafka is reachable, so a Kafka outage can't stop the app booting.
+      auto-startup: false
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        # Never let Kafka stall a redirect: cap how long send() may block on metadata or a full buffer
+        # (Kafka default 60 s). ClickEventProducer falls back to counting in Redis when this is hit.
+        max.block.ms: 500
+        # Give up on undeliverable events sooner (defaults: 30 s / 120 s) so the fallback runs promptly.
+        # delivery.timeout.ms must be >= linger.ms + request.timeout.ms.
+        request.timeout.ms: 5000
+        delivery.timeout.ms: 10000
     consumer:
       group-id: analytics-group
       auto-offset-reset: earliest
